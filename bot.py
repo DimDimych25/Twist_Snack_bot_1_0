@@ -383,6 +383,6 @@ def main():
     print("Бот запущен...")
     application.run_polling()
 
-###test
+
 if __name__ == "__main__":
     main()
