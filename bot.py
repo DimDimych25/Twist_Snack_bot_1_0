@@ -21,6 +21,7 @@ from telegram.ext import (
 from math import radians, sin, cos, sqrt, atan2
 from aiohttp import web
 import threading
+import time
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8106167716:AAEl3--rXh86H7z8SxwoFKOuS5CerJ5vW_U"
@@ -394,26 +395,26 @@ def run_web_server():
     # Запускаем в отдельном event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_app())
+    try:
+        loop.run_until_complete(run_app())
+    except Exception as e:
+        logging.error(f"Web server error: {e}")
+    finally:
+        loop.close()
 
 
 def start_web_server_thread():
     """Запуск веб-сервера в отдельном потоке"""
     thread = threading.Thread(target=run_web_server, daemon=True)
     thread.start()
+    logging.info("Web server thread started")
     return thread
 
 
 # ===== ЗАПУСК БОТА =====
 
-def main():
-    """Основная функция запуска бота"""
-    # Запускаем веб-сервер в отдельном потоке
-    start_web_server_thread()
-
-    # Создаем и настраиваем приложение бота
-    application = Application.builder().token(BOT_TOKEN).build()
-
+def setup_bot_handlers(application):
+    """Настройка обработчиков бота"""
     # Обработчики команд
     application.add_handler(CommandHandler("start", start))
 
@@ -430,9 +431,33 @@ def main():
     # Обработчик неизвестных сообщений
     application.add_handler(MessageHandler(filters.ALL, handle_unknown_message))
 
+
+def main():
+    """Основная функция запуска бота"""
+    # Создаем и настраиваем приложение бота
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # Настраиваем обработчики
+    setup_bot_handlers(application)
+
+    # Запускаем веб-сервер в отдельном потоке
+    start_web_server_thread()
+
+    # Даем время веб-серверу запуститься
+    time.sleep(2)
+
     # Запуск бота
     logging.info("Бот запущен...")
-    application.run_polling()
+
+    try:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True  # Важно: отбрасываем ожидающие обновления при запуске
+        )
+    except Exception as e:
+        logging.error(f"Bot error: {e}")
+    finally:
+        logging.info("Bot stopped")
 
 
 if __name__ == "__main__":
