@@ -1,6 +1,8 @@
 import logging
 import pandas as pd
 import io
+import os
+import asyncio
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -17,11 +19,15 @@ from telegram.ext import (
     filters
 )
 from math import radians, sin, cos, sqrt, atan2
+from aiohttp import web
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8106167716:AAEl3--rXh86H7z8SxwoFKOuS5CerJ5vW_U"
 GOOGLE_SHEETS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSWt19kiS7cdliNwfs9SriPW-LGrr4lmLl2Q6AojRqGyqwy9lI91PB-9OYKi5LOJBbbB5dx6uaqA5tK/pub?gid=0&single=true&output=csv"
 MAX_DISTANCE_KM = 10  # Максимальное расстояние для поиска точек
+
+# Получаем порт из переменной окружения (нужно для Render)
+PORT = int(os.environ.get('PORT', 8080))
 
 # Настройка логирования
 logging.basicConfig(
@@ -357,10 +363,37 @@ async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("🤔 Я не понимаю эту команду. Используйте кнопки меню.")
 
 
+# ===== ВЕБ-СЕРВЕР ДЛЯ RENDER =====
+
+async def health_check(request):
+    """Обработчик для health check запросов"""
+    return web.Response(text="Bot is running")
+
+
+async def start_web_server():
+    """Запуск веб-сервера для Render"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+
+    logging.info(f"Web server started on port {PORT}")
+    return runner
+
+
 # ===== ЗАПУСК БОТА =====
 
-def main():
+async def main():
     """Основная функция запуска бота"""
+    # Запускаем веб-сервер для Render
+    web_runner = await start_web_server()
+
+    # Создаем и настраиваем приложение бота
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Обработчики команд
@@ -380,9 +413,12 @@ def main():
     application.add_handler(MessageHandler(filters.ALL, handle_unknown_message))
 
     # Запуск бота
-    print("Бот запущен...")
-    application.run_polling()
+    logging.info("Бот запущен...")
+    await application.run_polling()
+
+    # Останавливаем веб-сервер при завершении работы
+    await web_runner.cleanup()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
