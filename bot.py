@@ -2,7 +2,6 @@ import logging
 import pandas as pd
 import io
 import os
-import asyncio
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -20,8 +19,6 @@ from telegram.ext import (
 )
 from math import radians, sin, cos, sqrt, atan2
 from aiohttp import web
-import threading
-import time
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8106167716:AAEl3--rXh86H7z8SxwoFKOuS5CerJ5vW_U"
@@ -30,6 +27,8 @@ MAX_DISTANCE_KM = 10  # Максимальное расстояние для п�
 
 # Получаем порт из переменной окружения (нужно для Render)
 PORT = int(os.environ.get('PORT', 8080))
+# Получаем URL для вебхука (нужно указать ваш домен Render)
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
 
 # Настройка логирования
 logging.basicConfig(
@@ -365,55 +364,52 @@ async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("🤔 Я не понимаю эту команду. Используйте кнопки меню.")
 
 
-# ===== ВЕБ-СЕРВЕР ДЛЯ RENDER =====
+# ===== ВЕБ-СЕРВЕР И WEBHOOK =====
 
 async def health_check(request):
     """Обработчик для health check запросов"""
     return web.Response(text="Bot is running")
 
 
-def run_web_server():
-    """Запуск веб-сервера в отдельном потоке"""
-
-    async def create_app():
-        app = web.Application()
-        app.router.add_get('/health', health_check)
-        app.router.add_get('/', health_check)
-        return app
-
-    async def run_app():
-        app = await create_app()
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', PORT)
-        await site.start()
-        logging.info(f"Web server started on port {PORT}")
-        # Бесконечный цикл чтобы сервер не завершался
-        while True:
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-    # Запускаем в отдельном event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+async def handle_webhook(request):
+    """Обработчик вебхуков от Telegram"""
     try:
-        loop.run_until_complete(run_app())
+        # Получаем данные обновления
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+
+        # Обрабатываем обновление
+        await application.update_queue.put(update)
+        return web.Response(text="OK")
     except Exception as e:
-        logging.error(f"Web server error: {e}")
-    finally:
-        loop.close()
+        logging.error(f"Webhook error: {e}")
+        return web.Response(text="Error", status=500)
 
 
-def start_web_server_thread():
-    """Запуск веб-сервера в отдельном потоке"""
-    thread = threading.Thread(target=run_web_server, daemon=True)
-    thread.start()
-    logging.info("Web server thread started")
-    return thread
+async def setup_webhook():
+    """Настройка вебхука"""
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        await application.bot.set_webhook(webhook_url)
+        logging.info(f"Webhook set to: {webhook_url}")
+    else:
+        logging.warning("WEBHOOK_URL not set, using polling fallback")
 
 
-# ===== ЗАПУСК БОТА =====
+async def on_startup(app):
+    """Действия при запуске приложения"""
+    await setup_webhook()
 
-def setup_bot_handlers(application):
+
+async def on_shutdown(app):
+    """Действия при остановке приложения"""
+    if WEBHOOK_URL:
+        await application.bot.delete_webhook()
+        logging.info("Webhook deleted")
+    await application.shutdown()
+
+
+def setup_bot_handlers():
     """Настройка обработчиков бота"""
     # Обработчики команд
     application.add_handler(CommandHandler("start", start))
@@ -432,32 +428,35 @@ def setup_bot_handlers(application):
     application.add_handler(MessageHandler(filters.ALL, handle_unknown_message))
 
 
+# Глобальная переменная для приложения
+application = Application.builder().token(BOT_TOKEN).build()
+
+
 def main():
     """Основная функция запуска бота"""
-    # Создаем и настраиваем приложение бота
-    application = Application.builder().token(BOT_TOKEN).build()
-
     # Настраиваем обработчики
-    setup_bot_handlers(application)
+    setup_bot_handlers()
 
-    # Запускаем веб-сервер в отдельном потоке
-    start_web_server_thread()
+    # Создаем веб-приложение
+    app = web.Application()
 
-    # Даем время веб-серверу запуститься
-    time.sleep(2)
+    # Добавляем маршруты
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)
+    app.router.add_post('/webhook', handle_webhook)
 
-    # Запуск бота
-    logging.info("Бот запущен...")
+    # Настраиваем обработчики запуска и остановки
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
 
-    try:
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True  # Важно: отбрасываем ожидающие обновления при запуске
-        )
-    except Exception as e:
-        logging.error(f"Bot error: {e}")
-    finally:
-        logging.info("Bot stopped")
+    # Запускаем приложение
+    logging.info("Starting bot with webhook...")
+    web.run_app(
+        app,
+        host='0.0.0.0',
+        port=PORT,
+        print=lambda _: logging.info(f"Server started on port {PORT}")
+    )
 
 
 if __name__ == "__main__":

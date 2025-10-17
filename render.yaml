@@ -8,3 +8,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: WEBHOOK_URL
+        value: https://twist-snack-bot-1-0-1.onrender.com
