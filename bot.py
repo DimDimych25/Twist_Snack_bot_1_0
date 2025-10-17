@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 from math import radians, sin, cos, sqrt, atan2
 from aiohttp import web
+import threading
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8106167716:AAEl3--rXh86H7z8SxwoFKOuS5CerJ5vW_U"
@@ -370,28 +371,45 @@ async def health_check(request):
     return web.Response(text="Bot is running")
 
 
-async def start_web_server():
-    """Запуск веб-сервера для Render"""
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/', health_check)
+def run_web_server():
+    """Запуск веб-сервера в отдельном потоке"""
 
-    runner = web.AppRunner(app)
-    await runner.setup()
+    async def create_app():
+        app = web.Application()
+        app.router.add_get('/health', health_check)
+        app.router.add_get('/', health_check)
+        return app
 
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
+    async def run_app():
+        app = await create_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        logging.info(f"Web server started on port {PORT}")
+        # Бесконечный цикл чтобы сервер не завершался
+        while True:
+            await asyncio.sleep(3600)  # Sleep for 1 hour
 
-    logging.info(f"Web server started on port {PORT}")
-    return runner
+    # Запускаем в отдельном event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(run_app())
+
+
+def start_web_server_thread():
+    """Запуск веб-сервера в отдельном потоке"""
+    thread = threading.Thread(target=run_web_server, daemon=True)
+    thread.start()
+    return thread
 
 
 # ===== ЗАПУСК БОТА =====
 
-async def main():
+def main():
     """Основная функция запуска бота"""
-    # Запускаем веб-сервер для Render
-    web_runner = await start_web_server()
+    # Запускаем веб-сервер в отдельном потоке
+    start_web_server_thread()
 
     # Создаем и настраиваем приложение бота
     application = Application.builder().token(BOT_TOKEN).build()
@@ -414,11 +432,8 @@ async def main():
 
     # Запуск бота
     logging.info("Бот запущен...")
-    await application.run_polling()
-
-    # Останавливаем веб-сервер при завершении работы
-    await web_runner.cleanup()
+    application.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
