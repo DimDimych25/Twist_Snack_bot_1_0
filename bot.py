@@ -1,4 +1,6 @@
 
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import logging
 import pandas as pd
 import io
@@ -21,6 +23,26 @@ from telegram.ext import (
 )
 from math import radians, sin, cos, sqrt, atan2
 #from aiohttp import web
+
+#простой HTTP-сервер для health-check
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Всегда отдаём 200 OK на любой путь (/, /health и т.п.)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        # Глушим лишние логи http.server
+        return
+
+def start_health_server(port: int):
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
@@ -379,26 +401,28 @@ def setup_bot_handlers(application: Application):
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("Переменная окружения BOT_TOKEN не задана.")
+        raise RuntimeError("Переменная окружения BOT_TOKEN не задана. Добавьте BOT_TOKEN в Render Environment.")
 
     application = Application.builder().token(BOT_TOKEN).build()
     setup_bot_handlers(application)
 
-    if WEBHOOK_URL:
-        logger.info("Starting bot in WEBHOOK mode")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=WEBHOOK_URL,
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-        )
-    else:
-        logger.info("Starting bot in POLLING mode")
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-        )
+    # Мы в polling-режиме (WEBHOOK_URL удалили), запускаем health-сервер для Render
+    start_health_server(PORT)
+    logger.info("Starting bot in POLLING mode with health-check on /")
+
+    # На всякий случай снимаем webhook перед polling (PTB делает это сам, но пусть будет)
+    # Важно: это синхронная функция, поэтому используем asyncio.run
+    try:
+        import asyncio
+        asyncio.run(application.bot.delete_webhook(drop_pending_updates=True))
+    except Exception as e:
+        logger.warning(f"Не удалось удалить webhook перед polling: {e}")
+
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
+
 
 if __name__ == "__main__":
     main()
