@@ -1,3 +1,4 @@
+
 import logging
 import pandas as pd
 import io
@@ -20,17 +21,18 @@ from telegram.ext import (
 )
 from math import radians, sin, cos, sqrt, atan2
 from aiohttp import web
-import threading
 
 # ===== НАСТРОЙКИ =====
-BOT_TOKEN = "8106167716:AAEl3--rXh86H7z8SxwoFKOuS5CerJ5vW_U"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 GOOGLE_SHEETS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSWt19kiS7cdliNwfs9SriPW-LGrr4lmLl2Q6AojRqGyqwy9lI91PB-9OYKi5LOJBbbB5dx6uaqA5tK/pub?gid=0&single=true&output=csv"
 MAX_DISTANCE_KM = 10  # Максимальное расстояние для поиска точек
 
-# Получаем порт из переменной окружения (нужно для Render)
+# Render.com ожидает, что приложение будет слушать этот порт
 PORT = int(os.environ.get('PORT', 8080))
-# Получаем URL для вебхука
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
+
+# WEBHOOK_URL следует задать в переменных окружения Render как публичный URL сервиса + путь /webhook
+# Пример: https://twist-snack-bot-1-0-1.onrender.com/webhook
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '').strip()
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,6 +40,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+logger = logging.getLogger(__name__)
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ =====
 
@@ -66,39 +69,36 @@ def load_data_from_google_sheets():
         df = df.dropna(subset=['Широта', 'Долгота'])
         return df
     except Exception as e:
-        logging.error(f"Ошибка загрузки данных: {e}")
+        logger.error(f"Ошибка загрузки данных: {e}")
         return pd.DataFrame()
 
 
 def get_unique_categories(df):
     """Получение уникальных типов мест"""
-    return df['Тип'].unique().tolist()
+    return df['Тип'].dropna().unique().tolist()
 
 
 def get_subcategories_by_type(df, selected_type):
     """Получение подтипов для выбранного типа"""
-    return df[df['Тип'] == selected_type]['Подтип'].unique().tolist()
+    return df[df['Тип'] == selected_type]['Подтип'].dropna().unique().tolist()
 
 
 def find_nearest_places(df, user_lat, user_lon, place_type, subcategory, max_distance=MAX_DISTANCE_KM, n=5):
     """Поиск n ближайших мест по фильтрам в радиусе max_distance км"""
-    # Фильтрация по типу и подтипу
     filtered_df = df[(df['Тип'] == place_type) & (df['Подтип'] == subcategory)]
 
     if filtered_df.empty:
         return []
 
-    # Расчет расстояний и фильтрация по максимальному расстоянию
     distances = []
     for _, row in filtered_df.iterrows():
         distance = haversine(user_lat, user_lon, row['Широта'], row['Долгота'])
-        if distance <= max_distance:  # Фильтруем только точки в радиусе max_distance км
+        if distance <= max_distance:
             distances.append((row, distance))
 
     if not distances:
         return []
 
-    # Сортировка по расстоянию и выбор топ-n
     distances.sort(key=lambda x: x[1])
     return distances[:n]
 
@@ -109,7 +109,7 @@ def generate_yandex_maps_link(lat, lon):
 
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ главного меню (используется в нескольких местах)"""
+    """Показ главного меню"""
     keyboard = [
         [KeyboardButton("🗺️ План поездки")],
         [KeyboardButton("🔍 Поиск места")],
@@ -117,14 +117,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-    # Проверяем, является ли update сообщением или callback_query
     if update.message:
         await update.message.reply_text(
             "🏠 Главное меню:\n\nВыберите режим работы:",
             reply_markup=reply_markup
         )
-    else:  # Это callback_query
-        # Для callback_query отправляем новое сообщение вместо редактирования старого
+    else:
         await update.callback_query.message.reply_text(
             "🏠 Главное меню:\n\nВыберите режим работы:",
             reply_markup=reply_markup
@@ -134,13 +132,11 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== ОСНОВНЫЕ ФУНКЦИИ БОТА =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
     await show_main_menu(update, context)
 
 
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик главного меню"""
-    text = update.message.text
+    text = (update.message.text or "").strip()
 
     if text == "🗺️ План поездки":
         await send_trip_plan(update, context)
@@ -148,22 +144,21 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await request_location(update, context)
     elif text == "🏠 Главное меню":
         await show_main_menu(update, context)
+    else:
+        await handle_unknown_message(update, context)
 
 
 async def send_trip_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправка плана поездки (CSV файл)"""
     df = load_data_from_google_sheets()
 
     if df.empty:
         await update.message.reply_text("❌ В данный момент база данных недоступна. Попробуйте позже.")
         return
 
-    # Создаем CSV файл в памяти
     csv_buffer = io.StringIO()
     df.to_csv(csv_buffer, index=False)
     csv_buffer.seek(0)
 
-    # Отправляем файл пользователю
     await update.message.reply_document(
         document=io.BytesIO(csv_buffer.getvalue().encode()),
         filename="food_guide_plan.csv",
@@ -172,7 +167,6 @@ async def send_trip_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def request_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос местоположения пользователя"""
     keyboard = [
         [KeyboardButton("📍 Отправить местоположение", request_location=True)],
         [KeyboardButton("🏠 Главное меню")]
@@ -186,8 +180,11 @@ async def request_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка полученного местоположения"""
     location = update.message.location
+    if not location:
+        await update.message.reply_text("❌ Не удалось получить местоположение. Попробуйте еще раз.")
+        return
+
     context.user_data['user_lat'] = location.latitude
     context.user_data['user_lon'] = location.longitude
 
@@ -198,12 +195,10 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ В базе данных нет доступных категорий.")
         return
 
-    # Создаем клавиатуру с типами мест
     keyboard = []
     for category in categories:
         keyboard.append([InlineKeyboardButton(category, callback_data=f"type_{category}")])
 
-    # Добавляем кнопку возврата в главное меню
     keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -215,7 +210,6 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_category_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора категории"""
     query = update.callback_query
     await query.answer()
 
@@ -229,12 +223,10 @@ async def handle_category_selection(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_text("❌ Для выбранного типа нет доступных подкатегорий.")
         return
 
-    # Создаем клавиатуру с подтипами
     keyboard = []
     for subcategory in subcategories:
         keyboard.append([InlineKeyboardButton(subcategory, callback_data=f"subtype_{subcategory}")])
 
-    # Добавляем кнопку возврата в главное меню
     keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -246,7 +238,6 @@ async def handle_category_selection(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_subcategory_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора подкатегории и поиск ближайших мест"""
     query = update.callback_query
     await query.answer()
 
@@ -269,27 +260,25 @@ async def handle_subcategory_selection(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # Сохраняем результаты в user_data для последующего выбора
     context.user_data['nearest_places'] = [
         (place.to_dict(), distance) for place, distance in nearest_places
     ]
 
-    # Формируем сообщение со списком мест
     message_text = f"🏆 Найденные места ({selected_type} - {selected_subtype}) в радиусе {MAX_DISTANCE_KM} км:\n\n"
     keyboard = []
 
-    for i, (place_data, distance) in enumerate(nearest_places, 1):
-        message_text += f"{i}. {place_data['Название']} (расстояние: {distance:.1f} км)\n"
-        if 'Примечание' in place_data and pd.notna(place_data['Примечание']):
-            message_text += f"   📝 {place_data['Примечание']}\n"
+    for i, (place, distance) in enumerate(nearest_places, 1):
+        place_dict = place.to_dict()
+        message_text += f"{i}. {place_dict['Название']} (расстояние: {distance:.1f} км)\n"
+        if 'Примечание' in place_dict and pd.notna(place_dict['Примечание']):
+            message_text += f"   📝 {place_dict['Примечание']}\n"
         message_text += "\n"
 
         keyboard.append([InlineKeyboardButton(
-            f"{i}. {place_data['Название']}",
+            f"{i}. {place_dict['Название']}",
             callback_data=f"place_{i - 1}"
         )])
 
-    # Добавляем кнопку возврата в главное меню
     keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -301,18 +290,17 @@ async def handle_subcategory_selection(update: Update, context: ContextTypes.DEF
 
 
 async def handle_place_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора конкретного места"""
     query = update.callback_query
     await query.answer()
 
-    place_index = int(query.data.replace("place_", ""))
+    idx = int(query.data.replace("place_", ""))
     nearest_places = context.user_data.get('nearest_places', [])
 
-    if place_index >= len(nearest_places):
+    if idx >= len(nearest_places):
         await query.edit_message_text("❌ Ошибка: место не найдено.")
         return
 
-    place_data, distance = nearest_places[place_index]
+    place_data, distance = nearest_places[idx]
     yandex_maps_url = generate_yandex_maps_link(place_data['Широта'], place_data['Долгота'])
 
     message_text = (
@@ -325,7 +313,6 @@ async def handle_place_selection(update: Update, context: ContextTypes.DEFAULT_T
     if 'Примечание' in place_data and pd.notna(place_data['Примечание']):
         message_text += f"📝 Примечание: {place_data['Примечание']}\n"
 
-    # Кнопка для возврата в главное меню
     keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -334,20 +321,17 @@ async def handle_place_selection(update: Update, context: ContextTypes.DEFAULT_T
         reply_markup=reply_markup
     )
 
-    # Отправляем отдельное сообщение со ссылкой
     await context.bot.send_message(
-        chat_id=query.message.chat_id,
+        chat_id=query.message.chat.id,
         text=f"🗺️ [Построить маршрут в Яндекс.Картах]({yandex_maps_url})",
         parse_mode='Markdown'
     )
 
 
 async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка возврата в главное меню из инлайн-кнопки"""
     query = update.callback_query
     await query.answer()
 
-    # Просто отправляем новое сообщение с главным меню вместо редактирования старого
     keyboard = [
         [KeyboardButton("🗺️ План поездки")],
         [KeyboardButton("🔍 Поиск места")],
@@ -362,105 +346,67 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка неизвестных сообщений"""
     await update.message.reply_text("🤔 Я не понимаю эту команду. Используйте кнопки меню.")
 
 
-# ===== ВЕБ-СЕРВЕР ДЛЯ RENDER =====
+# ===== AIOHTTP health-check (общий для webhook режима) =====
 
 async def health_check(request):
-    """Обработчик для health check запросов"""
     return web.Response(text="Bot is running")
 
 
-def run_web_server():
-    """Запуск веб-сервера в отдельном потоке"""
-
-    async def create_app():
-        app = web.Application()
-        app.router.add_get('/health', health_check)
-        app.router.add_get('/', health_check)
-        return app
-
-    async def run_app():
-        app = await create_app()
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', PORT)
-        await site.start()
-        logging.info(f"Web server started on port {PORT}")
-        # Бесконечный цикл чтобы сервер не завершался
-        while True:
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-
-    # Запускаем в отдельном event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(run_app())
-    except Exception as e:
-        logging.error(f"Web server error: {e}")
-    finally:
-        loop.close()
-
-
-def start_web_server_thread():
-    """Запуск веб-сервера в отдельном потоке"""
-    thread = threading.Thread(target=run_web_server, daemon=True)
-    thread.start()
-    logging.info("Web server thread started")
-    return thread
-
-
-# ===== ЗАПУСК БОТА =====
-
-def setup_bot_handlers(application):
-    """Настройка обработчиков бота"""
-    # Обработчики команд
+def setup_bot_handlers(application: Application):
     application.add_handler(CommandHandler("start", start))
-
-    # Обработчики сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
 
-    # Обработчики callback-запросов (инлайн кнопки)
     application.add_handler(CallbackQueryHandler(handle_category_selection, pattern="^type_"))
     application.add_handler(CallbackQueryHandler(handle_subcategory_selection, pattern="^subtype_"))
     application.add_handler(CallbackQueryHandler(handle_place_selection, pattern="^place_"))
     application.add_handler(CallbackQueryHandler(handle_main_menu_callback, pattern="^main_menu$"))
 
-    # Обработчик неизвестных сообщений
+    # Обработчик неизвестных сообщений должен идти последним
     application.add_handler(MessageHandler(filters.ALL, handle_unknown_message))
 
 
-def main():
-    """Основная функция запуска бота"""
-    # Создаем и настраиваем приложение бота
-    application = Application.builder().token(BOT_TOKEN).build()
+async def _build_web_app():
+    """AIOHTTP приложение с /health, которое PTB сможет использовать"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)
+    return app
 
-    # Настраиваем обработчики
+
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("Переменная окружения BOT_TOKEN не задана. Добавьте BOT_TOKEN в Render Environment.")
+
+    application = Application.builder().token(BOT_TOKEN).build()
     setup_bot_handlers(application)
 
-    # Запускаем веб-сервер в отдельном потоке
-    start_web_server_thread()
-
-    # Даем время веб-серверу запуститься
-    import time
-    time.sleep(2)
-
-    # Запуск бота с polling
-    logging.info("Starting bot with polling...")
-
-    try:
+    if WEBHOOK_URL:
+        # WEBHOOK режим (Render production). Исключает любой polling -> нет конфликтов getUpdates.
+        logger.info("Starting bot in WEBHOOK mode")
+        # Создадим отдельный webapp с /health и отдадим его PTB
+        webapp = asyncio.get_event_loop().run_until_complete(_build_web_app())
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+            # по желанию: webhook_path=URL path уже включен в WEBHOOK_URL
+            webapp=webapp,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+    else:
+        # POLLING режим (локальная разработка). Убедимся, что webhook снят.
+        logger.info("Starting bot in POLLING mode")
+        # run_polling сам удаляет webhook; на всякий случай можно явно:
+        # asyncio.get_event_loop().run_until_complete(application.bot.delete_webhook(drop_pending_updates=True))
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
-            close_loop=False  # Важно: не закрывать loop, так как веб-сервер использует свой
         )
-    except Exception as e:
-        logging.error(f"Bot error: {e}")
-    finally:
-        logging.info("Bot stopped")
 
 
 if __name__ == "__main__":
