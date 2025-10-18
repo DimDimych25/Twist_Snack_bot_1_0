@@ -20,7 +20,7 @@ from telegram.ext import (
     filters
 )
 from math import radians, sin, cos, sqrt, atan2
-from aiohttp import web
+#from aiohttp import web
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
@@ -351,8 +351,8 @@ async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_T
 
 # ===== AIOHTTP health-check (общий для webhook режима) =====
 
-async def health_check(request):
-    return web.Response(text="Bot is running")
+#async def health_check(request):
+#    return web.Response(text="Bot is running")
 
 
 def setup_bot_handlers(application: Application):
@@ -369,45 +369,36 @@ def setup_bot_handlers(application: Application):
     application.add_handler(MessageHandler(filters.ALL, handle_unknown_message))
 
 
-async def _build_web_app():
-    """AIOHTTP приложение с /health, которое PTB сможет использовать"""
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/', health_check)
-    return app
+#async def _build_web_app():
+#    """AIOHTTP приложение с /health, которое PTB сможет использовать"""
+#    app = web.Application()
+#    app.router.add_get('/health', health_check)
+#    app.router.add_get('/', health_check)
+#    return app
 
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("Переменная окружения BOT_TOKEN не задана. Добавьте BOT_TOKEN в Render Environment.")
+        raise RuntimeError("Переменная окружения BOT_TOKEN не задана.")
 
     application = Application.builder().token(BOT_TOKEN).build()
     setup_bot_handlers(application)
 
     if WEBHOOK_URL:
-        # WEBHOOK режим (Render production). Исключает любой polling -> нет конфликтов getUpdates.
         logger.info("Starting bot in WEBHOOK mode")
-        # Создадим отдельный webapp с /health и отдадим его PTB
-        webapp = asyncio.get_event_loop().run_until_complete(_build_web_app())
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
             webhook_url=WEBHOOK_URL,
-            # по желанию: webhook_path=URL path уже включен в WEBHOOK_URL
-            webapp=webapp,
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
         )
     else:
-        # POLLING режим (локальная разработка). Убедимся, что webhook снят.
         logger.info("Starting bot in POLLING mode")
-        # run_polling сам удаляет webhook; на всякий случай можно явно:
-        # asyncio.get_event_loop().run_until_complete(application.bot.delete_webhook(drop_pending_updates=True))
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
         )
-
 
 if __name__ == "__main__":
     main()
