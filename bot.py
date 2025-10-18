@@ -403,18 +403,21 @@ def main():
     if not BOT_TOKEN:
         raise RuntimeError("Переменная окружения BOT_TOKEN не задана. Добавьте BOT_TOKEN в Render Environment.")
 
+    # >>> добавьте эти две строки СРАЗУ после проверки токена:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # <<<
+
     application = Application.builder().token(BOT_TOKEN).build()
     setup_bot_handlers(application)
 
-    # Мы в polling-режиме (WEBHOOK_URL удалили), запускаем health-сервер для Render
+    # health-сервер оставляем как есть
     start_health_server(PORT)
     logger.info("Starting bot in POLLING mode with health-check on /")
 
-    # На всякий случай снимаем webhook перед polling (PTB делает это сам, но пусть будет)
-    # Важно: это синхронная функция, поэтому используем asyncio.run
+    # снимаем вебхук на всякий случай — теперь через наш loop
     try:
-        import asyncio
-        asyncio.run(application.bot.delete_webhook(drop_pending_updates=True))
+        loop.run_until_complete(application.bot.delete_webhook(drop_pending_updates=True))
     except Exception as e:
         logger.warning(f"Не удалось удалить webhook перед polling: {e}")
 
@@ -422,7 +425,6 @@ def main():
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
-
 
 if __name__ == "__main__":
     main()
