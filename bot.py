@@ -121,7 +121,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
-    if text == "🗺️ План поездки":
+    if text == "🗺️ Скачать все точки":
         await send_trip_plan(update, context)
     elif text == "🔍 Поиск места":
         await request_location(update, context)
