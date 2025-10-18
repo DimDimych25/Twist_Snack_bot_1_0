@@ -104,7 +104,7 @@ def generate_yandex_maps_link(lat, lon):
 # -------------------- UI --------------------
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [KeyboardButton("🗺️ План поездки")],
+        [KeyboardButton("🗺️ Скачать все точки")],
         [KeyboardButton("🔍 Поиск места")],
         [KeyboardButton("🏠 Главное меню")],
     ]
