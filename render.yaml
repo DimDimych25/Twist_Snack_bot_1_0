@@ -1,3 +1,12 @@
-envVars:
-  - key: PYTHON_VERSION
-    value: 3.11.9
+services:
+  - type: worker              # было: web
+    name: telegram-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TELEGRAM_TOKEN   # ваш токен; не храните в git, заведите в UI как Secret
+        sync: false

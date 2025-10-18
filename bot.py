@@ -184,7 +184,7 @@ async def send_trip_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_document(
         document=io.BytesIO(csv_buffer.getvalue().encode()),
         filename="food_guide_plan.csv",
-        caption="📋 Вот ваш план поездки! Вы можете импортировать этот CSV файл в различные картографические сервисы."
+        caption="📋 Вот все наши точки! Вы можете импортировать этот CSV файл в различные картографические сервисы."
     )
 
 
@@ -355,7 +355,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
 
     keyboard = [
-        [KeyboardButton("🗺️ План поездки")],
+        [KeyboardButton("🗺️ Скачать все точки")],
         [KeyboardButton("🔍 Поиск места")],
         [KeyboardButton("🏠 Главное меню")]
     ]
